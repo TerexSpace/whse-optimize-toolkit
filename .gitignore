@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.pyd
+
+# Jupyter notebooks
+.ipynb_checkpoints
+
+# IDEs
+.idea/
+.vscode/
+
+# Environment
+.env
+venv/
+env/
+
+# Data files
+*.csv
+*.json
+*.xml
+*.xlsx
+
+# Reports
+*.html
+*.pdf

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wms-optlab"
+version = "0.1.0"
+authors = [
+  { name="JOSS Reviewer", email="reviewer@example.com" },
+]
+description = "WMS-OptLab: An open-source toolkit for optimization of ERP warehouse modules"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "networkx",
+    "ortools",
+    "matplotlib",
+    "click",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/example/wms-optlab"
+"Bug Tracker" = "https://github.com/example/wms-optlab/issues"
+
+[project.scripts]
+wms-optlab = "wms_optlab.cli:main"
