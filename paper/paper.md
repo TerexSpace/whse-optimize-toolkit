@@ -17,6 +17,8 @@ affiliations:
     index: 1
 date: 27 November 2025
 bibliography: paper.bib
+repository: https://github.com/TerexSpace/whse-optimize-toolkit.git
+DOI: https://doi.org/10.5281/zenodo.17739851
 ---
 
 # Summary
