@@ -12,7 +12,3 @@ def batch_by_due_date(orders: List[Order], batch_size: int) -> List[List[Order]]
     # Create batches of a fixed size
     batches = [sorted_orders[i:i + batch_size] for i in range(0, len(sorted_orders), batch_size)]
     return batches
-
-def batch_by_zone():
-    """Stub for batching orders based on picking zones."""
-    raise NotImplementedError("Zone-based batching not yet implemented.")

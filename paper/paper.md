@@ -3,61 +3,140 @@ title: 'WMS-OptLab: An open-source toolkit for optimization of ERP warehouse mod
 tags:
   - Python
   - warehouse management
+  - supply chain
   - optimization
   - ERP
   - operations research
+  - logistics
 authors:
-  - name: Placeholder Author 1
-    orcid: 0000-0000-0000-0000
-    affiliation: 1
-  - name: Placeholder Author 2
-    orcid: 0000-0000-0000-0000
-    affiliation: "1, 2"
+  - name: Almas Ospanov
+    orcid: 0009-0004-3834-130X
+    affiliation: "1"
 affiliations:
- - name: Placeholder University or Company
-   index: 1
- - name: Another Placeholder Institution
-   index: 2
-date: 26 November 2025
-bibliography: reference.lib
+  - name: Astana IT Univeristy, Kazakhstan
+    index: 1
+date: 27 November 2025
+bibliography: paper.bib
 ---
 
 # Summary
 
-WMS-OptLab is an open-source Python toolkit designed for the modeling, optimization, and evaluation of warehouse logistics operations, particularly those integrated with Enterprise Resource Planning (ERP) and Warehouse Management Systems (WMS). The package provides a modular framework for researchers and practitioners to analyze and improve key warehouse processes, including storage location assignment (slotting), order picking routes, and order batching. It features a layered architecture that separates data models, optimization algorithms, and evaluation metrics, promoting extensibility and interoperability. By offering both heuristic and exact optimization methods, along with tools for scenario analysis and visualization, WMS-OptLab serves as a valuable resource for academic research, education, and industrial engineering applications.
+WMS-OptLab is an open-source Python toolkit for modeling, optimizing, and evaluating warehouse logistics operations integrated with Enterprise Resource Planning (ERP) and Warehouse Management Systems (WMS). It provides a modular framework to analyze and improve storage location assignment (slotting), picker routing, order batching, and end-to-end what-if scenario analysis. The library exposes typed data models, heuristic and mathematical programming solvers, distance-aware layout builders, and evaluation utilities enabling researchers and practitioners to compare policies reproducibly. By offering interoperable components built atop the scientific Python stack [@harris2020array; @reback2020pandas; @hagberg2008exploring] and modern optimization backends [@ortools], WMS-OptLab lowers the barrier to experimenting with novel warehouse strategies and supports transparent, extensible research workflows.
 
 # Statement of Need
 
-The efficiency of warehouse operations is a critical factor in supply chain performance. Picker travel time, in particular, can constitute over 50% of the total cost of order fulfillment [@de2007design]. Optimizing warehouse layout, slotting strategies, and routing policies can yield substantial cost savings and throughput improvements. While many commercial WMS packages include optimization modules, they often operate as "black boxes," limiting their use in research and customized industrial applications. There is a need for an open-source, well-documented, and extensible tool that allows for transparent experimentation with and development of new optimization algorithms. WMS-OptLab addresses this need by providing a Python-based, interoperable toolkit for warehouse optimization research and practice.
+Warehouse picker travel distances and associated labor costs can account for more than half of total order fulfillment effort [@de2007design]. While commercial WMS and ERP platforms typically include optimization capabilities, these modules are often proprietary, opaque, and difficult to adapt to specific operational constraints or research hypotheses. Researchers and industrial engineers therefore lack an open, extensible, peer-reviewable codebase for prototyping novel slotting strategies, routing heuristics, and batching policies that integrate directly with standard ERP/WMS data exports.
+
+WMS-OptLab addresses this gap by providing a Python-based research toolkit with:
+
+- **Data integration**: Direct CSV adapters for common ERP/WMS export formats, with validation to detect critical warehouse configurations (depot locations, SKU availability).
+- **Modular optimization**: Pluggable implementations of established heuristics (ABC-popularity slotting, S-shape routing) and exact methods via mathematical programming, allowing researchers to mix and match components.
+- **Reproducibility**: Deterministic algorithms with explicit parameter documentation, extensive unit test coverage, and example notebooks demonstrating typical workflows.
+- **Extensibility**: Abstract base classes for solver backends, distance metrics, and routing policies enabling new research contributions without forking the codebase.
+- **Scenario analysis**: Built-in what-if analysis framework to compare multiple configurations and quantify operational trade-offs.
 
 # State of the Field
 
-The field of warehouse optimization is rich with academic literature on topics such as the traveling salesman problem (TSP) for picker routing, quadratic assignment problems (QAP) for slotting, and various heuristics for order batching [@roodbergen2001agv]. Several academic and a few open-source tools exist for specific sub-problems, but a comprehensive, integrated toolkit that connects these different facets of warehouse operations is less common. WMS-OptLab aims to bridge this gap by providing an easy-to-use library that can model the interdependencies between slotting, routing, and batching, and can be easily integrated with data from real-world ERP/WMS systems.
+Warehouse optimization literature typically addresses routing, slotting, and batching as independent combinatorial problems: the Traveling Salesman Problem (TSP) for picker routing [@christofides1976worst], the Quadratic Assignment Problem (QAP) for slotting [@roodbergen2001agv], and bin-packing variants for batching. General-purpose optimization libraries (e.g., OR-Tools [@ortools], PuLP, Pyomo) and graph analysis toolkits (e.g., NetworkX [@hagberg2008exploring]) provide essential primitives for modeling and solving these problems.
 
-# Software Description
+However, an integrated, open-source toolkit that simultaneously addresses:
+- **Data standardization**: CSV-to-warehouse-model conversion with ERP/WMS-specific validation,
+- **Algorithm integration**: Side-by-side implementations of competing heuristics and exact solvers for benchmarking,
+- **Evaluation infrastructure**: Distance calculations, route simulation, and KPI reporting,
+- **Research reproducibility**: Deterministic outputs, comprehensive testing, and example workflows,
 
-WMS-OptLab is structured into several core modules:
+remains largely absent from the open-source landscape. WMS-OptLab consolidates these capabilities into a single, composable package designed for both research validation and practical experimentation in warehouse operations.
 
-- **`data`**: Contains data models for core warehouse entities (e.g., `SKU`, `Location`, `Order`) and adapters for parsing data from common ERP/WMS export formats (e.g., CSV). It also includes synthetic data generators for research purposes.
-- **`layout`**: Provides tools for representing warehouse geometry and topology, including the creation of graph-based network models for distance calculations using libraries like `networkx`.
-- **`slotting`**: Implements algorithms for storage location assignment, ranging from simple ABC-popularity heuristics to MILP (Mixed-Integer Linear Programming) formulations that can be solved using backends like OR-Tools.
-- **`routing`**: Includes common picker routing policies such as S-shape traversal and interfaces for TSP-based optimization of picking tours.
-- **`batching`**: Offers heuristics and metaheuristics (e.g., Simulated Annealing) for grouping orders into efficient picking waves.
-- **`evaluation`**: Provides a suite of performance metrics (e.g., total travel distance, workload balance) and reporting tools to compare different operational scenarios.
-- **`solvers`**: An abstraction layer for optimization backends, with an initial implementation for Google's OR-Tools.
+# Software Architecture
 
-The software is written in Python 3.11+ with full type hinting and is designed with SOLID principles to ensure modularity and ease of extension.
+WMS-OptLab is organized into layered modules implementing distinct aspects of warehouse optimization:
+
+**Data Layer** (`data/`)
+- **Core models**: Immutable dataclasses (`SKU`, `Location`, `Order`, `Warehouse`) providing type-safe warehouse representations.
+- **ERP adapters**: `load_generic_erp_data()` converts pandas DataFrames (standard ERP exports) into `Warehouse` objects with validation (depot detection, SKU filtering).
+- **Data generators**: Synthetic SKU and order generators following realistic power-law demand distributions for reproducible research experiments.
+
+**Layout & Geometry** (`layout/`)
+- **Distance metrics**: Manhattan and Euclidean distance functions supporting 3D warehouse coordinates.
+- **Topology**: `create_warehouse_graph()` builds networkx graphs of warehouse connectivity, enabling shortest-path calculations and TSP approximations.
+- **Visualization**: 2D layout plotting with color-coded location utilization and route overlays for intuitive analysis.
+
+**Optimization Components**
+- **Slotting** (`slotting/`): ABC-popularity heuristic assigns high-demand SKUs to closest locations; MILP formulations via pluggable solver backends (currently OR-Tools CP-SAT) minimize total picker travel; evaluation computes expected travel distance under assumed demand.
+- **Routing** (`routing/`): S-shape (serpentine) policy; Christofides TSP approximation for small pick sets; route simulation quantifies distance and pick counts per order.
+- **Batching** (`batching/`): Due-date heuristics and simulated-annealing metaheuristics group orders under weight/volume constraints, minimizing batch cost.
+
+**Evaluation & Reporting** (`evaluation/`)
+- KPI calculations (workload per picker, congestion proxies, travel metrics).
+- Text and Markdown report generation with pandas integration for export.
+
+**Scenarios & What-If** (`scenarios/`)
+- Multi-scenario comparison framework orchestrating slotting, routing, and evaluation to quantify operational trade-offs.
+
+**Solver Abstraction** (`solvers/`)
+- `OptimizationBackend` abstract interface enables swapping solver implementations (OR-Tools provided; extensible to other backends).
+
+**Integration & Export** (`integration/`)
+- WMS import file generation (CSV templates for slotting, SKU master, locations).
+- Adapter stubs for external simulators (e.g., sme_erpsim).
+
+The library targets Python 3.11+, employs type hints throughout, and uses frozen dataclasses and abstract base classes to facilitate extension (new routing policies, solver backends, distance metrics, ERP adapters) without modifying core code.
 
 # Illustrative Example
 
-A common use case for WMS-OptLab is to evaluate a new slotting strategy. A user can load their current warehouse data (SKUs, locations, historical orders), and then use the `assign_by_abc_popularity` heuristic to generate a new slotting plan. The `calculate_expected_travel_distance` function can then be used to estimate the travel distance for both the current and proposed slotting plans, providing a quantitative basis for the decision. The results, including a visualization of the new layout, can be generated with a few lines of code, as shown in the accompanying example Jupyter notebooks.
+A representative workflow ingests ERP CSV exports (SKUs, locations, historical orders), optimizes slotting, and compares travel performance:
+
+```python
+from wms_optlab.data.adapters_erp import load_generic_erp_data
+from wms_optlab.slotting.heuristics import assign_by_abc_popularity
+from wms_optlab.slotting.evaluation import calculate_expected_travel_distance
+from wms_optlab.layout.geometry import manhattan_distance
+
+# Load warehouse from ERP exports
+warehouse = load_generic_erp_data(skus_df, locations_df, orders_df)
+
+# Generate slotting plan via ABC-popularity heuristic
+slotting_plan = assign_by_abc_popularity(
+    warehouse.skus, warehouse.locations, warehouse.orders,
+    distance_metric=manhattan_distance
+)
+
+# Evaluate expected picker travel distance
+depot = next(l for l in warehouse.locations if l.location_type == 'depot')
+graph = warehouse.get_graph()
+travel_distance = calculate_expected_travel_distance(
+    slotting_plan, warehouse.orders, graph, depot.loc_id
+)
+print(f"Expected travel: {travel_distance:.0f} units")
+```
+
+The repository includes Jupyter notebooks (`simple_warehouse_slotting.ipynb`, `current_vs_optimized_routing.ipynb`) and sample datasets (SKUs, locations, orders) demonstrating complete workflows and integration patterns.
+
+# Testing and Quality Assurance
+
+Test coverage includes:
+- **Data layer**: CSV ingestion, validation logic, and synthetic data generation.
+- **Optimization**: Heuristic correctness (ABC popularity), MILP constraint enforcement, routing algorithms (S-shape, TSP).
+- **Integration**: End-to-end workflows combining multiple components.
+
+Tests are executed via `pytest` (1148 lines of production code; 4 test modules) with continuous integration (GitHub Actions) running the full suite on each commit to main and pull request. Example notebooks serve as integration smoke tests.
+
+# Applications and Research Impact
+
+WMS-OptLab enables:
+- **Reproducible research**: Deterministic, open-source implementations allow peer review and methodological validation.
+- **Comparative studies**: Side-by-side heuristic and exact method evaluation for warehouse policies.
+- **Practitioner validation**: CSV adapters allow practitioners to evaluate proposals on real data before deployment.
+- **Curriculum support**: Module structure and type hints make the toolkit suitable for teaching supply chain optimization and software engineering in operations research.
 
 # Availability and Reuse
 
-WMS-OptLab is open-source software distributed under the MIT license. The source code, documentation, and examples are available on GitHub at [https://github.com/example/wms-optlab](https://github.com/example/wms-optlab). The package is designed for reuse and extension. Users can easily add new optimization algorithms, routing policies, or data adapters for different ERP systems.
+WMS-OptLab is released under the permissive MIT License, conforming to the Open Source Initiative Definition [@osd]. Source code, comprehensive API documentation, example notebooks, and sample datasets are hosted at [https://github.com/TerexSpace/whse-optimize-toolkit](https://github.com/TerexSpace/whse-optimize-toolkit) under a public GitHub repository with an open issue tracker.
+
+Users can extend the toolkit with custom routing policies, solver backends (via `OptimizationBackend` interface), distance metrics, or ERP adapters while reusing core data models, evaluation utilities, and scenario infrastructure. A `CONTRIBUTING.md` document outlines contribution guidelines and development workflows.
 
 # Acknowledgements
 
-We acknowledge the contributions of the open-source community and the developers of the scientific Python stack, including `numpy`, `pandas`, `networkx`, and `ortools`, which form the foundation of this toolkit.
+We acknowledge the scientific Python community and the developers of foundational libraries: NumPy [@harris2020array], Pandas [@reback2020pandas], NetworkX [@hagberg2008exploring], and Google OR-Tools [@ortools], upon which WMS-OptLab is built.
 
 # References

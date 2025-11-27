@@ -6,17 +6,31 @@ build-backend = "setuptools.build_meta"
 name = "wms-optlab"
 version = "0.1.0"
 authors = [
-  { name="JOSS Reviewer", email="reviewer@example.com" },
+  { name="Author Name", email="author@example.com" },
 ]
 description = "WMS-OptLab: An open-source toolkit for optimization of ERP warehouse modules"
 readme = "README.md"
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "Development Status :: 4 - Beta",
 ]
+keywords = ["warehouse", "optimization", "supply-chain", "logistics", "erp", "wms", "operations-research"]
+
+[project.urls]
+Homepage = "https://github.com/TerexSpace/whse-optimize-toolkit"
+Documentation = "https://github.com/TerexSpace/whse-optimize-toolkit"
+Repository = "https://github.com/TerexSpace/whse-optimize-toolkit.git"
+Issues = "https://github.com/TerexSpace/whse-optimize-toolkit/issues"
+
 dependencies = [
     "numpy",
     "pandas",
@@ -26,9 +40,18 @@ dependencies = [
     "click",
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/example/wms-optlab"
-"Bug Tracker" = "https://github.com/example/wms-optlab/issues"
-
 [project.scripts]
 wms-optlab = "wms_optlab.cli:main"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "jupyter",
+    "nbconvert",
+    "lxml",
+]

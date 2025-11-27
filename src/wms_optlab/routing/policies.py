@@ -48,12 +48,3 @@ def get_s_shape_route(
 
     route.append(depot_loc.loc_id)
     return route
-
-
-def get_largest_gap_route():
-    """Stub for the largest gap routing heuristic."""
-    raise NotImplementedError("Largest gap routing not yet implemented.")
-
-def get_aisle_by_aisle_route():
-    """Stub for a simple aisle-by-aisle traversal."""
-    raise NotImplementedError("Aisle-by-aisle routing not yet implemented.")

@@ -52,7 +52,3 @@ def assign_by_abc_popularity(
             break  # No more locations left
 
     return slotting_plan
-
-def assign_by_correlation():
-    """Stub for correlation-based slotting (items often ordered together are stored together)."""
-    raise NotImplementedError("Correlation-based slotting not yet implemented.")

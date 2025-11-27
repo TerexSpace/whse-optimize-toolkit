@@ -57,12 +57,3 @@ def load_generic_erp_data(skus_df: pd.DataFrame, locations_df: pd.DataFrame, ord
             orders.append(Order(order_id=str(order_id), order_lines=order_lines))
 
     return Warehouse(skus=skus, locations=locations, orders=orders)
-
-
-def load_odoo_style_erp_data():
-    """Stub for loading data from an Odoo-like export."""
-    raise NotImplementedError("Odoo adapter not yet implemented.")
-
-def load_sap_like_erp_data():
-    """Stub for loading data from an SAP-like export."""
-    raise NotImplementedError("SAP adapter not yet implemented.")

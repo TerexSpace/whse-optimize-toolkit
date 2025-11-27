@@ -20,8 +20,3 @@ def analyze_order_profile(orders: List[Order]) -> Dict:
         "avg_qty_per_line": sum(qty_per_line) / len(qty_per_line) if qty_per_line else 0,
     }
     return profile
-
-def create_order_profile_from_dataframe(df: pd.DataFrame):
-    """Creates an order profile from a pandas DataFrame of historical orders."""
-    # This function would be more elaborate, grouping by order and analyzing distributions.
-    raise NotImplementedError("Function not yet implemented.")
