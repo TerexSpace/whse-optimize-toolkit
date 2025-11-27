@@ -3,15 +3,13 @@ title: "WMS-OptLab: An open-source toolkit for optimization of ERP warehouse mod
 message: "If you use this software, please cite it as below."
 type: software
 authors:
-  - family-names: YourLastName
-    given-names: YourFirstName
-    affiliation: Your Institution
-    orcid: "https://orcid.org/0000-0000-0000-0000"
-  - family-names: CollaboratorLastName
-    given-names: CollaboratorFirstName
-    affiliation: Collaborating Institution
-    orcid: "https://orcid.org/0000-0000-0000-0000"
+    - family-names: "Almas"
+    given-names: "Ospanov"
+    orcid: "https://orcid.org/0009-0004-3834-130X"
+    email: "a.ospanov@astanait.edu.kz"
+    affiliation: "Astana IT Univeristy"
+  
 repository-code: "https://github.com/TerexSpace/whse-optimize-toolkit"
 license: MIT
-version: "0.1.0"
+version: "1.0.0"
 date-released: "2025-11-26"
