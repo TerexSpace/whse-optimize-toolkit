@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "wms-optlab"
 version = "0.1.0"
 authors = [
-  { name="Author Name", email="author@example.com" },
+  { name="Almas Ospanov", email="a.ospanov@astanait.edu.kz" },
 ]
 description = "WMS-OptLab: An open-source toolkit for optimization of ERP warehouse modules"
 readme = "README.md"

@@ -100,11 +100,13 @@ class BenchmarkInstance:
 class BenchmarkInstanceGenerator:
     """Generates benchmark instances for warehouse optimization experiments."""
     
+    # Note: locations includes depot, so storage = locations - 1
+    # Ensure num_locations > num_skus for valid slotting
     SIZE_PRESETS = {
-        InstanceSize.SMALL: {'skus': 75, 'locations': 50, 'orders': 300},
-        InstanceSize.MEDIUM: {'skus': 300, 'locations': 200, 'orders': 1500},
-        InstanceSize.LARGE: {'skus': 1000, 'locations': 600, 'orders': 5000},
-        InstanceSize.XLARGE: {'skus': 2000, 'locations': 1200, 'orders': 15000}
+        InstanceSize.SMALL: {'skus': 75, 'locations': 100, 'orders': 300},
+        InstanceSize.MEDIUM: {'skus': 300, 'locations': 400, 'orders': 1500},
+        InstanceSize.LARGE: {'skus': 1000, 'locations': 1200, 'orders': 5000},
+        InstanceSize.XLARGE: {'skus': 2000, 'locations': 2400, 'orders': 15000}
     }
     
     def __init__(self, config: Optional[InstanceConfig] = None):
@@ -253,16 +255,22 @@ class BenchmarkInstanceGenerator:
         """Generate fishbone warehouse layout."""
         locations = []
         
+        # Calculate aisles and slots needed
+        # Fishbone: 2 sides × (num_aisles/2) aisles × slots_per_aisle
+        # So total = num_aisles × slots_per_aisle
+        num_aisles = max(self.config.num_aisles, 10)  # Ensure minimum aisles
+        slots_per_aisle = math.ceil(num_locations / num_aisles) + 1
+        
         # Fishbone has a central cross-aisle with diagonal access
         center_y = 50.0
         loc_count = 0
         
         # Main aisles on each side of center
         for side in [1, -1]:
-            for aisle in range(self.config.num_aisles // 2):
+            for aisle in range(num_aisles // 2):
                 aisle_x = (aisle + 1) * self.config.aisle_width * side + 25.0
                 
-                for slot in range(self.config.slots_per_aisle):
+                for slot in range(slots_per_aisle):
                     if loc_count >= num_locations:
                         break
                     

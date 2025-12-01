@@ -102,7 +102,6 @@ PYTHONPATH=src pytest -vv
 - Include type hints in function signatures
 - Update README.md for user-facing changes
 - Add example code in docstrings for complex functions
-- Update paper.md if your contribution significantly changes the software scope
 
 ## Submitting Changes
 
@@ -232,7 +231,7 @@ All contributions undergo peer review:
 
 Contributors are acknowledged in:
 - CITATION.cff (for substantial contributions)
-- Paper.md acknowledgements section (as appropriate)
+- README.md acknowledgements section (as appropriate)
 - GitHub contributors page
 
 ## Questions?

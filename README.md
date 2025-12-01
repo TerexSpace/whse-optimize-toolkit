@@ -158,7 +158,7 @@ If you use WMS-OptLab in academic work, please cite:
 ```bibtex
 @software{wmsoptlab2025,
   title={WMS-OptLab: An open-source toolkit for optimization of ERP warehouse modules},
-  author={Author Name},
+  author={Ospanov, Almas},
   year={2025},
   url={https://github.com/TerexSpace/whse-optimize-toolkit}
 }
