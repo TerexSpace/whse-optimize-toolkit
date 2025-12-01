@@ -30,11 +30,14 @@ env/
 
 # Reports
 *.html
-*.pdf
 
 # Excluded from repository
 .claude/
 .github/
-paper/
 tests/
 experiments_output/
+
+# Paper directory - include manuscripts but exclude old drafts and generated PDFs
+paper/*.pdf
+paper/*_old.*
+paper/generate_pdf.py
