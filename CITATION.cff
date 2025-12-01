@@ -2,15 +2,12 @@ cff-version: 1.2.0
 title: "WMS-OptLab: An open-source toolkit for optimization of ERP warehouse modules"
 message: "If you use this software, please cite it as below."
 type: software
-
 authors:
-  - family-names: "Ospanov"
-    given-names: "Almas"
+  - family-names: Ospanov
+    given-names: Almas
+    affiliation: Astana IT University
     orcid: "https://orcid.org/0009-0004-3834-130X"
-    email: "a.ospanov@astanait.edu.kz"
-    affiliation: "Astana IT University"
-
 repository-code: "https://github.com/TerexSpace/whse-optimize-toolkit"
-license: "MIT"
-version: "1.0.0"
-date-released: "2025-11-26"
+license: MIT
+version: "0.1.0"
+date-released: "01-DEC-2025"

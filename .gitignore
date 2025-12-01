@@ -31,3 +31,10 @@ env/
 # Reports
 *.html
 *.pdf
+
+# Excluded from repository
+.claude/
+.github/
+paper/
+tests/
+experiments_output/
