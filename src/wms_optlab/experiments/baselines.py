@@ -4,9 +4,10 @@ Baseline Algorithms for Comparative Experiments.
 Implements:
 1. NSGA-II (vanilla) - Standard NSGA-II without warehouse-specific enhancements
 2. MOEA/D - Multi-Objective Evolutionary Algorithm based on Decomposition
-3. Sequential Optimization - Traditional hierarchical approach (Slotting → Batching → Routing)
-4. ABC Heuristic - Activity-Based Classification baseline
-5. Random - Random assignment baseline
+3. ALNS - Adaptive Large Neighborhood Search with destroy-repair operators
+4. Sequential Optimization - Traditional hierarchical approach (Slotting → Batching → Routing)
+5. ABC Heuristic - Activity-Based Classification baseline
+6. Random - Random assignment baseline
 """
 
 import random
@@ -20,15 +21,27 @@ from ..data.models import Warehouse, Order
 from ..layout.geometry import manhattan_distance
 from ..slotting.heuristics import assign_by_abc_popularity
 from ..routing.policies import get_s_shape_route
+from ..routing.layout_aware_routing import get_adaptive_route, LayoutType as WarehouseLayoutType
 from .moiwof import ParetoSolution, ObjectiveType, MOIWOFConfig
 
 
 class BaselineAlgorithm:
     """Base class for all baseline algorithms."""
     
-    def __init__(self, warehouse: Warehouse, config: MOIWOFConfig):
+    def __init__(self, warehouse: Warehouse, config: MOIWOFConfig, 
+                 use_layout_aware_routing: bool = True):
+        """
+        Initialize baseline algorithm.
+        
+        Args:
+            warehouse: Warehouse instance with SKUs, locations, and orders
+            config: Algorithm configuration
+            use_layout_aware_routing: If True, use layout-aware routing that adapts
+                to fishbone and other layouts. If False, use traditional S-shape.
+        """
         self.warehouse = warehouse
         self.config = config
+        self.use_layout_aware_routing = use_layout_aware_routing
         self.depot = next((loc for loc in warehouse.locations if loc.location_type == 'depot'), None)
         self.graph = warehouse.get_graph()
         self.loc_map = {loc.loc_id: loc for loc in warehouse.locations}
@@ -50,7 +63,13 @@ class BaselineAlgorithm:
     
     def _compute_routes(self, slotting_plan: Dict[str, str], 
                         batches: List[List[str]]) -> Dict[str, List[str]]:
-        """Compute routes for each batch."""
+        """
+        Compute routes for each batch.
+        
+        Uses layout-aware routing by default, which automatically detects
+        fishbone and other non-standard layouts. Falls back to S-shape
+        if use_layout_aware_routing is False.
+        """
         routes = {}
         for batch_idx, batch in enumerate(batches):
             pick_loc_ids = set()
@@ -66,7 +85,15 @@ class BaselineAlgorithm:
                              if loc_id in self.loc_map]
             
             if pick_locations:
-                route = get_s_shape_route(pick_locations, self.graph, self.depot)
+                if self.use_layout_aware_routing:
+                    # Use layout-aware routing that handles fishbone and other layouts
+                    route = get_adaptive_route(
+                        pick_locations, self.graph, self.depot, 
+                        all_locations=list(self.warehouse.locations)
+                    )
+                else:
+                    # Fall back to traditional S-shape
+                    route = get_s_shape_route(pick_locations, self.graph, self.depot)
             else:
                 route = [self.depot.loc_id, self.depot.loc_id]
             
@@ -1009,3 +1036,512 @@ class RandomBaseline(BaselineAlgorithm):
         print(f"  Complete. Pareto front: {len(pareto_front)} solutions")
         
         return pareto_front, history
+
+
+class ALNS(BaselineAlgorithm):
+    """
+    Adaptive Large Neighborhood Search (ALNS) for joint warehouse optimization.
+    
+    ALNS is a state-of-the-art metaheuristic that adaptively selects destroy
+    and repair operators based on their past performance. This implementation
+    handles the joint slotting-batching-routing problem.
+    
+    References:
+        Ropke, S., & Pisinger, D. (2006). An adaptive large neighborhood search 
+        heuristic for the pickup and delivery problem with time windows.
+        Transportation Science, 40(4), 455-472.
+    """
+    
+    def __init__(self, warehouse: Warehouse, config: MOIWOFConfig,
+                 segment_size: int = 100, reaction_factor: float = 0.1,
+                 sigma1: float = 33, sigma2: float = 9, sigma3: float = 13,
+                 cooling_rate: float = 0.9995, start_temp: float = 100.0):
+        """
+        Initialize ALNS.
+        
+        Args:
+            warehouse: Warehouse instance
+            config: Algorithm configuration
+            segment_size: Iterations per segment for weight update
+            reaction_factor: Learning rate for operator weight updates
+            sigma1: Score for new global best
+            sigma2: Score for non-dominated improvement
+            sigma3: Score for accepted worse solution
+            cooling_rate: Simulated annealing cooling rate
+            start_temp: Initial temperature for acceptance
+        """
+        super().__init__(warehouse, config)
+        self.segment_size = segment_size
+        self.reaction_factor = reaction_factor
+        self.sigma1 = sigma1
+        self.sigma2 = sigma2
+        self.sigma3 = sigma3
+        self.cooling_rate = cooling_rate
+        self.start_temp = start_temp
+        
+        # Initialize operator weights
+        self.destroy_operators = {
+            'random_removal': self._destroy_random,
+            'worst_removal': self._destroy_worst,
+            'related_removal': self._destroy_related,
+            'zone_removal': self._destroy_zone
+        }
+        
+        self.repair_operators = {
+            'greedy_insertion': self._repair_greedy,
+            'regret_insertion': self._repair_regret,
+            'abc_guided': self._repair_abc_guided,
+            'distance_based': self._repair_distance
+        }
+        
+        self.destroy_weights = {op: 1.0 for op in self.destroy_operators}
+        self.repair_weights = {op: 1.0 for op in self.repair_operators}
+        
+        self.destroy_scores = {op: 0.0 for op in self.destroy_operators}
+        self.repair_scores = {op: 0.0 for op in self.repair_operators}
+        
+        self.destroy_usage = {op: 0 for op in self.destroy_operators}
+        self.repair_usage = {op: 0 for op in self.repair_operators}
+    
+    def _select_operator(self, weights: Dict[str, float]) -> str:
+        """Select operator using roulette wheel selection."""
+        total = sum(weights.values())
+        if total == 0:
+            return random.choice(list(weights.keys()))
+        
+        r = random.random() * total
+        cumsum = 0.0
+        for op, weight in weights.items():
+            cumsum += weight
+            if cumsum >= r:
+                return op
+        return list(weights.keys())[-1]
+    
+    def _update_weights(self):
+        """Update operator weights based on performance."""
+        for op in self.destroy_operators:
+            if self.destroy_usage[op] > 0:
+                pi = self.destroy_scores[op] / self.destroy_usage[op]
+                self.destroy_weights[op] = (
+                    self.destroy_weights[op] * (1 - self.reaction_factor) +
+                    self.reaction_factor * pi
+                )
+        
+        for op in self.repair_operators:
+            if self.repair_usage[op] > 0:
+                pi = self.repair_scores[op] / self.repair_usage[op]
+                self.repair_weights[op] = (
+                    self.repair_weights[op] * (1 - self.reaction_factor) +
+                    self.reaction_factor * pi
+                )
+        
+        # Reset scores and usage for next segment
+        self.destroy_scores = {op: 0.0 for op in self.destroy_operators}
+        self.repair_scores = {op: 0.0 for op in self.repair_operators}
+        self.destroy_usage = {op: 0 for op in self.destroy_operators}
+        self.repair_usage = {op: 0 for op in self.repair_operators}
+    
+    def _accept_solution(self, current_obj: float, new_obj: float, temp: float) -> bool:
+        """Simulated annealing acceptance criterion."""
+        if new_obj < current_obj:
+            return True
+        
+        delta = new_obj - current_obj
+        prob = np.exp(-delta / max(temp, 1e-10))
+        return random.random() < prob
+    
+    # ============== Destroy Operators ==============
+    
+    def _destroy_random(self, solution: ParetoSolution, 
+                       destroy_rate: float = 0.3) -> Tuple[Dict[str, str], List[str]]:
+        """Random removal of SKU assignments."""
+        slotting = dict(solution.slotting_plan)
+        n_remove = max(1, int(len(slotting) * destroy_rate))
+        
+        removed_skus = random.sample(list(slotting.keys()), n_remove)
+        for sku_id in removed_skus:
+            del slotting[sku_id]
+        
+        return slotting, removed_skus
+    
+    def _destroy_worst(self, solution: ParetoSolution,
+                      destroy_rate: float = 0.3) -> Tuple[Dict[str, str], List[str]]:
+        """Remove SKUs with highest distance contribution."""
+        slotting = dict(solution.slotting_plan)
+        n_remove = max(1, int(len(slotting) * destroy_rate))
+        
+        # Calculate distance contribution for each SKU
+        sku_distances = {}
+        for sku_id, loc_id in slotting.items():
+            if loc_id in self.loc_map:
+                loc = self.loc_map[loc_id]
+                demand = self.sku_demand.get(sku_id, 1)
+                dist = manhattan_distance(loc.coordinates, self.depot.coordinates)
+                sku_distances[sku_id] = dist * demand
+        
+        # Remove highest contributors
+        sorted_skus = sorted(sku_distances.items(), key=lambda x: -x[1])
+        removed_skus = [sku_id for sku_id, _ in sorted_skus[:n_remove]]
+        
+        for sku_id in removed_skus:
+            if sku_id in slotting:
+                del slotting[sku_id]
+        
+        return slotting, removed_skus
+    
+    def _destroy_related(self, solution: ParetoSolution,
+                        destroy_rate: float = 0.3) -> Tuple[Dict[str, str], List[str]]:
+        """Remove spatially related SKUs (clustered removal)."""
+        slotting = dict(solution.slotting_plan)
+        n_remove = max(1, int(len(slotting) * destroy_rate))
+        
+        if not slotting:
+            return slotting, []
+        
+        # Pick seed SKU
+        seed_sku = random.choice(list(slotting.keys()))
+        seed_loc = self.loc_map.get(slotting[seed_sku])
+        
+        if not seed_loc:
+            return self._destroy_random(solution, destroy_rate)
+        
+        # Find spatially closest SKUs
+        distances = []
+        for sku_id, loc_id in slotting.items():
+            if loc_id in self.loc_map and sku_id != seed_sku:
+                loc = self.loc_map[loc_id]
+                dist = manhattan_distance(loc.coordinates, seed_loc.coordinates)
+                distances.append((sku_id, dist))
+        
+        distances.sort(key=lambda x: x[1])
+        removed_skus = [seed_sku] + [sku_id for sku_id, _ in distances[:n_remove-1]]
+        
+        for sku_id in removed_skus:
+            if sku_id in slotting:
+                del slotting[sku_id]
+        
+        return slotting, removed_skus
+    
+    def _destroy_zone(self, solution: ParetoSolution,
+                     destroy_rate: float = 0.3) -> Tuple[Dict[str, str], List[str]]:
+        """Remove all SKUs in a random zone/aisle."""
+        slotting = dict(solution.slotting_plan)
+        
+        # Group SKUs by x-coordinate (aisle)
+        aisle_skus: Dict[float, List[str]] = {}
+        for sku_id, loc_id in slotting.items():
+            if loc_id in self.loc_map:
+                x = self.loc_map[loc_id].coordinates[0]
+                aisle_x = round(x / 10) * 10  # Group by 10-unit intervals
+                if aisle_x not in aisle_skus:
+                    aisle_skus[aisle_x] = []
+                aisle_skus[aisle_x].append(sku_id)
+        
+        if not aisle_skus:
+            return self._destroy_random(solution, destroy_rate)
+        
+        # Select random aisle
+        selected_aisle = random.choice(list(aisle_skus.keys()))
+        removed_skus = aisle_skus[selected_aisle]
+        
+        # Limit removal to destroy_rate
+        n_max = max(1, int(len(slotting) * destroy_rate))
+        removed_skus = removed_skus[:n_max]
+        
+        for sku_id in removed_skus:
+            if sku_id in slotting:
+                del slotting[sku_id]
+        
+        return slotting, removed_skus
+    
+    # ============== Repair Operators ==============
+    
+    def _repair_greedy(self, slotting: Dict[str, str], 
+                       removed_skus: List[str]) -> Dict[str, str]:
+        """Greedy insertion - assign to nearest available location."""
+        used_locs = set(slotting.values())
+        
+        for sku_id in removed_skus:
+            best_loc = None
+            best_dist = float('inf')
+            
+            for loc in self.storage_locations:
+                if loc.loc_id not in used_locs:
+                    dist = manhattan_distance(loc.coordinates, self.depot.coordinates)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_loc = loc.loc_id
+            
+            if best_loc:
+                slotting[sku_id] = best_loc
+                used_locs.add(best_loc)
+        
+        return slotting
+    
+    def _repair_regret(self, slotting: Dict[str, str],
+                       removed_skus: List[str]) -> Dict[str, str]:
+        """Regret-2 insertion - maximize regret of not choosing best position."""
+        used_locs = set(slotting.values())
+        remaining = list(removed_skus)
+        
+        while remaining:
+            best_sku = None
+            best_loc = None
+            max_regret = -float('inf')
+            
+            for sku_id in remaining:
+                demand = self.sku_demand.get(sku_id, 1)
+                costs = []
+                
+                for loc in self.storage_locations:
+                    if loc.loc_id not in used_locs:
+                        dist = manhattan_distance(loc.coordinates, self.depot.coordinates)
+                        costs.append((loc.loc_id, dist * demand))
+                
+                if costs:
+                    costs.sort(key=lambda x: x[1])
+                    best_cost = costs[0][1]
+                    second_cost = costs[1][1] if len(costs) > 1 else best_cost * 2
+                    regret = second_cost - best_cost
+                    
+                    if regret > max_regret:
+                        max_regret = regret
+                        best_sku = sku_id
+                        best_loc = costs[0][0]
+            
+            if best_sku and best_loc:
+                slotting[best_sku] = best_loc
+                used_locs.add(best_loc)
+                remaining.remove(best_sku)
+            else:
+                break
+        
+        return slotting
+    
+    def _repair_abc_guided(self, slotting: Dict[str, str],
+                          removed_skus: List[str]) -> Dict[str, str]:
+        """ABC-guided repair - assign based on demand ranking."""
+        used_locs = set(slotting.values())
+        
+        # Sort removed SKUs by demand (high to low)
+        sorted_skus = sorted(removed_skus, 
+                            key=lambda s: -self.sku_demand.get(s, 0))
+        
+        # Sort available locations by distance to depot (low to high)
+        available_locs = sorted(
+            [loc for loc in self.storage_locations if loc.loc_id not in used_locs],
+            key=lambda l: manhattan_distance(l.coordinates, self.depot.coordinates)
+        )
+        
+        for i, sku_id in enumerate(sorted_skus):
+            if i < len(available_locs):
+                slotting[sku_id] = available_locs[i].loc_id
+                used_locs.add(available_locs[i].loc_id)
+        
+        return slotting
+    
+    def _repair_distance(self, slotting: Dict[str, str],
+                        removed_skus: List[str]) -> Dict[str, str]:
+        """Distance-based repair considering order co-occurrence."""
+        used_locs = set(slotting.values())
+        
+        # Build co-occurrence matrix for removed SKUs
+        cooccurrence: Dict[str, Dict[str, int]] = {sku: {} for sku in removed_skus}
+        for order in self.warehouse.orders:
+            order_skus = [line.sku.sku_id for line in order.order_lines]
+            for sku1 in removed_skus:
+                if sku1 in order_skus:
+                    for sku2 in order_skus:
+                        if sku2 != sku1 and sku2 in slotting:
+                            cooccurrence[sku1][sku2] = cooccurrence[sku1].get(sku2, 0) + 1
+        
+        for sku_id in removed_skus:
+            # Find centroid of frequently co-occurring SKUs
+            related_locs = []
+            for related_sku, count in cooccurrence[sku_id].items():
+                if related_sku in slotting and slotting[related_sku] in self.loc_map:
+                    loc = self.loc_map[slotting[related_sku]]
+                    for _ in range(count):
+                        related_locs.append(loc.coordinates)
+            
+            if related_locs:
+                centroid = (
+                    np.mean([c[0] for c in related_locs]),
+                    np.mean([c[1] for c in related_locs]),
+                    np.mean([c[2] for c in related_locs])
+                )
+            else:
+                centroid = self.depot.coordinates
+            
+            # Find nearest available location to centroid
+            best_loc = None
+            best_dist = float('inf')
+            
+            for loc in self.storage_locations:
+                if loc.loc_id not in used_locs:
+                    dist = manhattan_distance(loc.coordinates, centroid)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_loc = loc.loc_id
+            
+            if best_loc:
+                slotting[sku_id] = best_loc
+                used_locs.add(best_loc)
+        
+        return slotting
+    
+    def _create_solution(self, slotting_plan: Dict[str, str]) -> ParetoSolution:
+        """Create a complete solution from slotting plan."""
+        # Generate batches
+        orders = list(self.warehouse.orders)
+        
+        # Proximity-based batching using current slotting
+        order_centroids = {}
+        for order in orders:
+            locs = []
+            for line in order.order_lines:
+                loc_id = slotting_plan.get(line.sku.sku_id)
+                if loc_id and loc_id in self.loc_map:
+                    locs.append(self.loc_map[loc_id].coordinates)
+            
+            if locs:
+                centroid = (np.mean([l[0] for l in locs]),
+                           np.mean([l[1] for l in locs]),
+                           np.mean([l[2] for l in locs]))
+            else:
+                centroid = self.depot.coordinates
+            order_centroids[order.order_id] = centroid
+        
+        # Sort orders by proximity and due date
+        orders_sorted = sorted(orders, key=lambda o: (
+            manhattan_distance(order_centroids[o.order_id], self.depot.coordinates),
+            o.due_date
+        ))
+        
+        batches = []
+        for i in range(0, len(orders_sorted), self.config.max_batch_size):
+            batch = [o.order_id for o in orders_sorted[i:i+self.config.max_batch_size]]
+            batches.append(batch)
+        
+        routes = self._compute_routes(slotting_plan, batches)
+        objectives = self._evaluate_objectives(slotting_plan, batches, routes)
+        
+        return ParetoSolution(
+            slotting_plan=slotting_plan,
+            batches=batches,
+            routes=routes,
+            objectives=objectives
+        )
+    
+    def _get_weighted_objective(self, solution: ParetoSolution) -> float:
+        """Compute weighted sum of normalized objectives."""
+        # Use equal weights for simplicity
+        return (
+            solution.objectives[ObjectiveType.TRAVEL_DISTANCE.value] / 1000 +
+            solution.objectives[ObjectiveType.THROUGHPUT_TIME.value] / 1000 +
+            solution.objectives[ObjectiveType.WORKLOAD_BALANCE.value]
+        )
+    
+    def run(self) -> Tuple[List[ParetoSolution], List[Dict[str, Any]]]:
+        """Run ALNS algorithm."""
+        print("Running ALNS...")
+        
+        if self.config.random_seed is not None:
+            random.seed(self.config.random_seed)
+            np.random.seed(self.config.random_seed)
+        
+        # Initialize with ABC solution
+        initial_slotting = assign_by_abc_popularity(
+            self.warehouse.skus, self.warehouse.locations, self.warehouse.orders,
+            distance_metric=manhattan_distance,
+            depot_location=self.depot.coordinates
+        )
+        
+        current_solution = self._create_solution(initial_slotting)
+        best_solution = current_solution
+        
+        # Archive for Pareto front
+        archive: List[ParetoSolution] = [current_solution]
+        
+        temperature = self.start_temp
+        self.generation_history = []
+        
+        max_iterations = self.config.max_generations * self.config.population_size
+        
+        for iteration in range(max_iterations):
+            # Select operators
+            destroy_op = self._select_operator(self.destroy_weights)
+            repair_op = self._select_operator(self.repair_weights)
+            
+            # Apply destroy-repair
+            partial_slotting, removed_skus = self.destroy_operators[destroy_op](current_solution)
+            new_slotting = self.repair_operators[repair_op](partial_slotting, removed_skus)
+            
+            # Create new solution
+            new_solution = self._create_solution(new_slotting)
+            
+            # Track operator usage
+            self.destroy_usage[destroy_op] += 1
+            self.repair_usage[repair_op] += 1
+            
+            # Determine acceptance and scores
+            current_obj = self._get_weighted_objective(current_solution)
+            new_obj = self._get_weighted_objective(new_solution)
+            best_obj = self._get_weighted_objective(best_solution)
+            
+            score = 0
+            
+            if new_obj < best_obj:
+                # New global best
+                score = self.sigma1
+                best_solution = new_solution
+            elif any(not sol.dominates(new_solution) for sol in archive):
+                # Non-dominated improvement
+                score = self.sigma2
+            elif self._accept_solution(current_obj, new_obj, temperature):
+                # Accepted worse solution
+                score = self.sigma3
+            
+            # Update current solution if accepted
+            if new_obj < current_obj or self._accept_solution(current_obj, new_obj, temperature):
+                current_solution = new_solution
+                
+                # Update archive
+                archive = [sol for sol in archive if not new_solution.dominates(sol)]
+                if not any(sol.dominates(new_solution) for sol in archive):
+                    archive.append(new_solution)
+            
+            # Update operator scores
+            self.destroy_scores[destroy_op] += score
+            self.repair_scores[repair_op] += score
+            
+            # Update weights at segment boundaries
+            if (iteration + 1) % self.segment_size == 0:
+                self._update_weights()
+            
+            # Cool down temperature
+            temperature *= self.cooling_rate
+            
+            # Record history at generation boundaries
+            if iteration % self.config.population_size == 0:
+                gen = iteration // self.config.population_size
+                pareto_front = self._get_non_dominated(archive)
+                
+                self.generation_history.append({
+                    'generation': gen,
+                    'best_travel_distance': best_solution.objectives[ObjectiveType.TRAVEL_DISTANCE.value],
+                    'best_workload_balance': best_solution.objectives[ObjectiveType.WORKLOAD_BALANCE.value],
+                    'archive_size': len(archive),
+                    'temperature': temperature,
+                    'destroy_weights': dict(self.destroy_weights),
+                    'repair_weights': dict(self.repair_weights)
+                })
+                
+                if gen % 10 == 0:
+                    best_dist = best_solution.objectives[ObjectiveType.TRAVEL_DISTANCE.value]
+                    print(f"  Gen {gen}: Dist={best_dist:.1f}, Archive={len(archive)}, Temp={temperature:.2f}")
+        
+        pareto_front = self._get_non_dominated(archive)
+        print(f"  Complete. Pareto front: {len(pareto_front)} solutions")
+        
+        return pareto_front, self.generation_history

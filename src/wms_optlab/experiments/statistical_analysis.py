@@ -4,15 +4,25 @@ Statistical Analysis Module for Computational Experiments.
 Provides rigorous statistical analysis for comparing optimization algorithms:
 - Descriptive statistics (mean, std, median, IQR)
 - Non-parametric tests (Wilcoxon, Friedman, Kruskal-Wallis)
-- Effect size calculations (Vargha-Delaney A12, Cliff's delta)
+- Effect size calculations (Vargha-Delaney A12, Cliff's delta, Cohen's d)
+- Multiple comparison corrections (Holm-Bonferroni, Benjamini-Hochberg)
 - Multi-objective quality indicators (Hypervolume, IGD, Spread)
+
+This module addresses reviewer concerns about lack of statistical significance testing
+by providing comprehensive analysis tools with proper multiple comparison corrections.
+
+References:
+- Vargha & Delaney (2000): A12 measure
+- Holm (1979): Sequential Bonferroni procedure
+- Benjamini & Hochberg (1995): False discovery rate control
 """
 
 import numpy as np
 from typing import List, Dict, Tuple, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from scipy import stats
 from collections import defaultdict
+import warnings
 
 from .moiwof import ParetoSolution
 
@@ -30,6 +40,9 @@ class StatisticalSummary:
     min_val: float
     max_val: float
     n: int
+    
+    def __str__(self) -> str:
+        return f"{self.metric_name}: {self.mean:.4f} ± {self.std:.4f} (n={self.n})"
 
 
 @dataclass
@@ -41,6 +54,23 @@ class HypothesisTestResult:
     significant: bool  # at alpha=0.05
     effect_size: Optional[float] = None
     effect_interpretation: Optional[str] = None
+    corrected_p_value: Optional[float] = None  # After multiple comparison correction
+    cohens_d: Optional[float] = None  # Effect size in standard deviation units
+    
+    def __str__(self) -> str:
+        sig = "***" if self.p_value < 0.001 else ("**" if self.p_value < 0.01 else ("*" if self.p_value < 0.05 else ""))
+        return f"{self.test_name}: p={self.p_value:.4f}{sig}, effect={self.effect_interpretation or 'N/A'}"
+
+
+@dataclass
+class MultipleComparisonResult:
+    """Results from multiple comparison correction."""
+    original_p_values: List[float]
+    corrected_p_values: List[float]
+    rejected: List[bool]
+    method: str
+    alpha: float
+    comparison_labels: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -65,7 +95,7 @@ class StatisticalAnalyzer:
         return StatisticalSummary(
             metric_name=metric_name,
             mean=np.mean(arr),
-            std=np.std(arr),
+            std=np.std(arr, ddof=1),  # Sample std with Bessel's correction
             median=np.median(arr),
             q1=np.percentile(arr, 25),
             q3=np.percentile(arr, 75),
@@ -75,11 +105,130 @@ class StatisticalAnalyzer:
             n=len(arr)
         )
     
+    def cohens_d(self, group1: List[float], group2: List[float]) -> float:
+        """
+        Calculate Cohen's d effect size for two groups.
+        
+        Interpretation:
+        - |d| < 0.2: negligible
+        - 0.2 <= |d| < 0.5: small
+        - 0.5 <= |d| < 0.8: medium
+        - |d| >= 0.8: large
+        """
+        n1, n2 = len(group1), len(group2)
+        var1, var2 = np.var(group1, ddof=1), np.var(group2, ddof=1)
+        
+        # Pooled standard deviation
+        pooled_std = np.sqrt(((n1 - 1) * var1 + (n2 - 1) * var2) / (n1 + n2 - 2))
+        
+        if pooled_std == 0:
+            return 0.0
+        
+        return (np.mean(group1) - np.mean(group2)) / pooled_std
+    
+    def holm_bonferroni_correction(self, p_values: List[float], 
+                                    labels: Optional[List[str]] = None) -> MultipleComparisonResult:
+        """
+        Apply Holm-Bonferroni correction for multiple comparisons.
+        
+        This is a step-down procedure that controls family-wise error rate (FWER)
+        while being more powerful than standard Bonferroni.
+        
+        Args:
+            p_values: List of p-values from pairwise comparisons
+            labels: Optional labels for each comparison
+            
+        Returns:
+            MultipleComparisonResult with corrected p-values and rejection decisions
+        """
+        n = len(p_values)
+        if n == 0:
+            return MultipleComparisonResult([], [], [], "holm-bonferroni", self.alpha)
+        
+        # Sort p-values with original indices
+        indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+        
+        corrected = [0.0] * n
+        rejected = [False] * n
+        
+        for rank, (orig_idx, p) in enumerate(indexed):
+            # Holm correction: multiply by (n - rank)
+            corrected_p = min(1.0, p * (n - rank))
+            corrected[orig_idx] = corrected_p
+            
+            # Reject if corrected p < alpha AND all previous (smaller) p-values were rejected
+            if rank == 0:
+                rejected[orig_idx] = corrected_p < self.alpha
+            else:
+                # Can only reject if previous hypotheses were rejected
+                prev_orig_idx = indexed[rank - 1][0]
+                rejected[orig_idx] = rejected[prev_orig_idx] and corrected_p < self.alpha
+        
+        return MultipleComparisonResult(
+            original_p_values=p_values,
+            corrected_p_values=corrected,
+            rejected=rejected,
+            method="holm-bonferroni",
+            alpha=self.alpha,
+            comparison_labels=labels or [f"comparison_{i}" for i in range(n)]
+        )
+    
+    def benjamini_hochberg_correction(self, p_values: List[float],
+                                       labels: Optional[List[str]] = None) -> MultipleComparisonResult:
+        """
+        Apply Benjamini-Hochberg correction for multiple comparisons.
+        
+        Controls false discovery rate (FDR), less conservative than Holm-Bonferroni.
+        
+        Args:
+            p_values: List of p-values from pairwise comparisons
+            labels: Optional labels for each comparison
+            
+        Returns:
+            MultipleComparisonResult with corrected p-values and rejection decisions
+        """
+        n = len(p_values)
+        if n == 0:
+            return MultipleComparisonResult([], [], [], "benjamini-hochberg", self.alpha)
+        
+        # Sort p-values with original indices
+        indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+        
+        corrected = [0.0] * n
+        rejected = [False] * n
+        
+        # Calculate adjusted p-values
+        prev_corrected = 1.0
+        for rank in range(n - 1, -1, -1):
+            orig_idx, p = indexed[rank]
+            # BH correction
+            corrected_p = min(prev_corrected, p * n / (rank + 1))
+            corrected[orig_idx] = corrected_p
+            prev_corrected = corrected_p
+            rejected[orig_idx] = corrected_p < self.alpha
+        
+        return MultipleComparisonResult(
+            original_p_values=p_values,
+            corrected_p_values=corrected,
+            rejected=rejected,
+            method="benjamini-hochberg",
+            alpha=self.alpha,
+            comparison_labels=labels or [f"comparison_{i}" for i in range(n)]
+        )
+    
     def wilcoxon_test(self, group1: List[float], group2: List[float], 
                       alternative: str = 'two-sided') -> HypothesisTestResult:
         """
         Perform Wilcoxon signed-rank test for paired samples.
         Use when comparing two algorithms on the same instances.
+        
+        Args:
+            group1: Results from algorithm 1 (one value per instance)
+            group2: Results from algorithm 2 (one value per instance)
+            alternative: 'two-sided', 'greater', or 'less'
+            
+        Returns:
+            HypothesisTestResult with test statistics and effect sizes
         """
         if len(group1) != len(group2):
             raise ValueError("Groups must have equal length for paired test")
@@ -93,10 +242,43 @@ class StatisticalAnalyzer:
                 p_value=1.0,
                 significant=False,
                 effect_size=0.5,
-                effect_interpretation="negligible"
+                effect_interpretation="negligible",
+                cohens_d=0.0
             )
         
-        statistic, p_value = stats.wilcoxon(group1, group2, alternative=alternative)
+        # Handle case with too few non-zero differences
+        non_zero_diff = diff[diff != 0]
+        if len(non_zero_diff) < 5:
+            warnings.warn(f"Only {len(non_zero_diff)} non-zero differences; results may be unreliable")
+        
+        try:
+            statistic, p_value = stats.wilcoxon(group1, group2, alternative=alternative)
+        except ValueError as e:
+            # Fallback if Wilcoxon fails
+            return HypothesisTestResult(
+                test_name="Wilcoxon signed-rank",
+                statistic=0.0,
+                p_value=1.0,
+                significant=False,
+                effect_size=0.5,
+                effect_interpretation="negligible (test failed)",
+                cohens_d=0.0
+            )
+        
+        # Calculate effect sizes
+        effect_size = self.vargha_delaney_a12(group1, group2)
+        effect_interpretation = self._interpret_a12(effect_size)
+        cohens_d_val = self.cohens_d(group1, group2)
+        
+        return HypothesisTestResult(
+            test_name="Wilcoxon signed-rank",
+            statistic=statistic,
+            p_value=p_value,
+            significant=p_value < self.alpha,
+            effect_size=effect_size,
+            effect_interpretation=effect_interpretation,
+            cohens_d=cohens_d_val
+        )
         
         # Calculate effect size (Vargha-Delaney A12)
         effect_size = self.vargha_delaney_a12(group1, group2)
@@ -116,11 +298,20 @@ class StatisticalAnalyzer:
         """
         Perform Mann-Whitney U test for independent samples.
         Use when comparing algorithms on different instances.
+        
+        Args:
+            group1: Results from algorithm 1
+            group2: Results from algorithm 2
+            alternative: 'two-sided', 'greater', or 'less'
+            
+        Returns:
+            HypothesisTestResult with test statistics and effect sizes
         """
         statistic, p_value = stats.mannwhitneyu(group1, group2, alternative=alternative)
         
         effect_size = self.vargha_delaney_a12(group1, group2)
         effect_interpretation = self._interpret_a12(effect_size)
+        cohens_d_val = self.cohens_d(group1, group2)
         
         return HypothesisTestResult(
             test_name="Mann-Whitney U",
@@ -128,7 +319,8 @@ class StatisticalAnalyzer:
             p_value=p_value,
             significant=p_value < self.alpha,
             effect_size=effect_size,
-            effect_interpretation=effect_interpretation
+            effect_interpretation=effect_interpretation,
+            cohens_d=cohens_d_val
         )
     
     def friedman_test(self, *groups: List[float]) -> HypothesisTestResult:
@@ -158,6 +350,165 @@ class StatisticalAnalyzer:
             p_value=p_value,
             significant=p_value < self.alpha
         )
+    
+    def nemenyi_post_hoc(self, *groups: List[float], 
+                         algorithm_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Perform Nemenyi post-hoc test after Friedman test.
+        
+        The Nemenyi test is used for pairwise comparisons between algorithms
+        when the Friedman test indicates significant differences. It controls
+        the family-wise error rate.
+        
+        Args:
+            *groups: Variable number of groups (algorithm results)
+            algorithm_names: Optional names for each algorithm
+            
+        Returns:
+            Dictionary with critical difference, average ranks, and significant pairs
+        """
+        k = len(groups)  # Number of algorithms
+        if k < 2:
+            return {'error': 'Need at least 2 groups'}
+        
+        n = len(groups[0])  # Number of instances
+        if not all(len(g) == n for g in groups):
+            return {'error': 'All groups must have same length'}
+        
+        if algorithm_names is None:
+            algorithm_names = [f"Alg_{i+1}" for i in range(k)]
+        
+        # Calculate average ranks
+        data = np.array(groups).T  # Shape: (n_instances, k_algorithms)
+        ranks = np.zeros_like(data, dtype=float)
+        
+        for i in range(n):
+            ranks[i] = stats.rankdata(data[i])
+        
+        avg_ranks = np.mean(ranks, axis=0)
+        
+        # Critical difference at alpha=0.05 (tabulated Nemenyi q-values)
+        # q_alpha for k groups (approximation for common values)
+        q_values = {
+            2: 1.960, 3: 2.343, 4: 2.569, 5: 2.728, 6: 2.850,
+            7: 2.949, 8: 3.031, 9: 3.102, 10: 3.164
+        }
+        q_alpha = q_values.get(k, 2.576)  # Default to approximate value
+        
+        cd = q_alpha * np.sqrt(k * (k + 1) / (6 * n))
+        
+        # Identify significantly different pairs
+        significant_pairs = []
+        all_comparisons = []
+        
+        for i in range(k):
+            for j in range(i + 1, k):
+                diff = abs(avg_ranks[i] - avg_ranks[j])
+                is_significant = diff > cd
+                all_comparisons.append({
+                    'pair': (algorithm_names[i], algorithm_names[j]),
+                    'rank_diff': diff,
+                    'critical_diff': cd,
+                    'significant': is_significant
+                })
+                if is_significant:
+                    significant_pairs.append((algorithm_names[i], algorithm_names[j]))
+        
+        return {
+            'critical_difference': cd,
+            'average_ranks': dict(zip(algorithm_names, avg_ranks)),
+            'rank_order': sorted(zip(algorithm_names, avg_ranks), key=lambda x: x[1]),
+            'significant_pairs': significant_pairs,
+            'all_comparisons': all_comparisons,
+            'n_instances': n,
+            'n_algorithms': k
+        }
+    
+    def epsilon_sensitivity_analysis(self, 
+                                     results: Dict[str, List[float]],
+                                     epsilon_values: Optional[List[float]] = None) -> Dict[str, Any]:
+        """
+        Perform epsilon-dominance sensitivity analysis.
+        
+        Analyzes how robust algorithm rankings are to small performance differences.
+        This helps determine if performance differences are practically significant
+        beyond statistical significance.
+        
+        Args:
+            results: Dictionary mapping algorithm name to list of metric values
+            epsilon_values: List of epsilon thresholds to test (default: [0.01, 0.05, 0.1])
+            
+        Returns:
+            Dictionary with sensitivity analysis results
+        """
+        if epsilon_values is None:
+            epsilon_values = [0.01, 0.02, 0.05, 0.10, 0.15, 0.20]
+        
+        algorithms = list(results.keys())
+        means = {alg: np.mean(results[alg]) for alg in algorithms}
+        best_mean = min(means.values())
+        
+        sensitivity_results = []
+        
+        for eps in epsilon_values:
+            threshold = best_mean * (1 + eps)
+            within_epsilon = [alg for alg in algorithms if means[alg] <= threshold]
+            
+            # Calculate relative improvements needed for non-winning algorithms
+            improvements_needed = {}
+            for alg in algorithms:
+                if alg not in within_epsilon:
+                    improvement = (means[alg] - threshold) / means[alg] * 100
+                    improvements_needed[alg] = improvement
+            
+            sensitivity_results.append({
+                'epsilon': eps,
+                'threshold': threshold,
+                'winners': within_epsilon,
+                'n_winners': len(within_epsilon),
+                'improvements_needed': improvements_needed
+            })
+        
+        # Find stability point (epsilon where ranking becomes stable)
+        stability_point = None
+        for i in range(len(sensitivity_results) - 1):
+            if sensitivity_results[i]['n_winners'] == sensitivity_results[i+1]['n_winners']:
+                stability_point = sensitivity_results[i]['epsilon']
+                break
+        
+        return {
+            'algorithm_means': means,
+            'best_algorithm': min(means, key=means.get),
+            'best_mean': best_mean,
+            'sensitivity_by_epsilon': sensitivity_results,
+            'stability_point': stability_point,
+            'practical_significance': self._assess_practical_significance(results)
+        }
+    
+    def _assess_practical_significance(self, results: Dict[str, List[float]]) -> Dict[str, Any]:
+        """Assess practical significance of differences between algorithms."""
+        algorithms = list(results.keys())
+        means = {alg: np.mean(results[alg]) for alg in algorithms}
+        
+        # Sort by mean
+        sorted_algs = sorted(algorithms, key=lambda a: means[a])
+        
+        # Calculate percentage differences between adjacent algorithms
+        pct_diffs = []
+        for i in range(len(sorted_algs) - 1):
+            alg1, alg2 = sorted_algs[i], sorted_algs[i+1]
+            pct_diff = (means[alg2] - means[alg1]) / means[alg1] * 100
+            pct_diffs.append({
+                'better': alg1,
+                'worse': alg2,
+                'percentage_difference': pct_diff
+            })
+        
+        return {
+            'ranking': sorted_algs,
+            'adjacent_differences': pct_diffs,
+            'total_range_pct': (max(means.values()) - min(means.values())) / min(means.values()) * 100
+        }
     
     def vargha_delaney_a12(self, group1: List[float], group2: List[float]) -> float:
         """

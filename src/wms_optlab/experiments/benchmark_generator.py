@@ -28,6 +28,8 @@ class InstanceSize(Enum):
     MEDIUM = "medium"
     LARGE = "large"
     XLARGE = "xlarge"
+    HUGE = "huge"       # Added for extended benchmarks
+    MASSIVE = "massive" # Added for extended benchmarks
 
 
 class LayoutType(Enum):
@@ -102,11 +104,15 @@ class BenchmarkInstanceGenerator:
     
     # Note: locations includes depot, so storage = locations - 1
     # Ensure num_locations > num_skus for valid slotting
+    # Updated with larger instances per reviewer feedback
     SIZE_PRESETS = {
-        InstanceSize.SMALL: {'skus': 75, 'locations': 100, 'orders': 300},
-        InstanceSize.MEDIUM: {'skus': 300, 'locations': 400, 'orders': 1500},
-        InstanceSize.LARGE: {'skus': 1000, 'locations': 1200, 'orders': 5000},
-        InstanceSize.XLARGE: {'skus': 2000, 'locations': 2400, 'orders': 15000}
+        InstanceSize.SMALL: {'skus': 100, 'locations': 150, 'orders': 500},
+        InstanceSize.MEDIUM: {'skus': 400, 'locations': 600, 'orders': 2000},
+        InstanceSize.LARGE: {'skus': 1000, 'locations': 1500, 'orders': 8000},
+        InstanceSize.XLARGE: {'skus': 2000, 'locations': 3000, 'orders': 20000},
+        # Extended sizes to address reviewer concern about benchmark coverage
+        InstanceSize.HUGE: {'skus': 3000, 'locations': 3600, 'orders': 30000},
+        InstanceSize.MASSIVE: {'skus': 5000, 'locations': 6000, 'orders': 50000}
     }
     
     def __init__(self, config: Optional[InstanceConfig] = None):
@@ -439,11 +445,18 @@ class BenchmarkInstanceGenerator:
                                   layouts: List[LayoutType] = None,
                                   profiles: List[DemandProfile] = None,
                                   instances_per_config: int = 5) -> List[BenchmarkInstance]:
-        """Generate a complete benchmark suite."""
+        """
+        Generate a complete benchmark suite for rigorous experimental evaluation.
+        
+        Default configuration generates 48 instances:
+        - 4 sizes (S, M, L, XL) × 3 layouts (PAR, FIS, FLY) × 2 profiles (PAR, UNI) × 2 reps
+        
+        This addresses reviewer concerns about limited benchmark coverage.
+        """
         if sizes is None:
-            sizes = [InstanceSize.SMALL, InstanceSize.MEDIUM, InstanceSize.LARGE]
+            sizes = [InstanceSize.SMALL, InstanceSize.MEDIUM, InstanceSize.LARGE, InstanceSize.XLARGE]
         if layouts is None:
-            layouts = [LayoutType.PARALLEL_AISLE, LayoutType.FISHBONE]
+            layouts = [LayoutType.PARALLEL_AISLE, LayoutType.FISHBONE, LayoutType.FLYING_V]
         if profiles is None:
             profiles = [DemandProfile.PARETO, DemandProfile.UNIFORM]
         
@@ -465,5 +478,63 @@ class BenchmarkInstanceGenerator:
                         instance = generator.generate(instance_id)
                         instances.append(instance)
                         instance_num += 1
+        
+        return instances
+    
+    @classmethod
+    def generate_eswa_revision_suite(cls) -> List[BenchmarkInstance]:
+        """
+        Generate the expanded benchmark suite for ESWA revision.
+        
+        Addresses reviewer concerns:
+        - 12 distinct configurations (was 4)
+        - Includes Large and XLarge instances (up to 2000 SKUs, 20000 orders)
+        - Tests all 3 layout types (parallel, fishbone, flying-v)
+        - Both Pareto and Uniform demand profiles
+        - 5 replications per configuration for statistical power
+        
+        Total: 60 instances (12 configs × 5 reps)
+        """
+        configs = [
+            # Small instances - fast tests
+            (InstanceSize.SMALL, LayoutType.PARALLEL_AISLE, DemandProfile.PARETO),
+            (InstanceSize.SMALL, LayoutType.FISHBONE, DemandProfile.PARETO),
+            (InstanceSize.SMALL, LayoutType.FLYING_V, DemandProfile.PARETO),
+            
+            # Medium instances - main results
+            (InstanceSize.MEDIUM, LayoutType.PARALLEL_AISLE, DemandProfile.PARETO),
+            (InstanceSize.MEDIUM, LayoutType.FISHBONE, DemandProfile.PARETO),
+            (InstanceSize.MEDIUM, LayoutType.FLYING_V, DemandProfile.PARETO),
+            (InstanceSize.MEDIUM, LayoutType.PARALLEL_AISLE, DemandProfile.UNIFORM),
+            (InstanceSize.MEDIUM, LayoutType.FISHBONE, DemandProfile.UNIFORM),
+            
+            # Large instances - scalability
+            (InstanceSize.LARGE, LayoutType.PARALLEL_AISLE, DemandProfile.PARETO),
+            (InstanceSize.LARGE, LayoutType.FISHBONE, DemandProfile.PARETO),
+            
+            # XLarge instances - stress test
+            (InstanceSize.XLARGE, LayoutType.PARALLEL_AISLE, DemandProfile.PARETO),
+            (InstanceSize.XLARGE, LayoutType.FISHBONE, DemandProfile.PARETO),
+        ]
+        
+        instances = []
+        for idx, (size, layout, profile) in enumerate(configs):
+            for rep in range(5):  # 5 replications per config
+                config = InstanceConfig(
+                    size=size,
+                    layout_type=layout,
+                    demand_profile=profile,
+                    random_seed=1000 + idx * 100 + rep
+                )
+                generator = cls(config)
+                
+                # Create descriptive instance ID
+                size_code = {'small': 'S', 'medium': 'M', 'large': 'L', 'xlarge': 'XL'}[size.value]
+                layout_code = {'parallel_aisle': 'PAR', 'fishbone': 'FIS', 'flying_v': 'FLV'}[layout.value]
+                profile_code = {'pareto': 'P', 'uniform': 'U'}[profile.value]
+                instance_id = f"{size_code}-{layout_code}-{profile_code}-R{rep+1}"
+                
+                instance = generator.generate(instance_id)
+                instances.append(instance)
         
         return instances

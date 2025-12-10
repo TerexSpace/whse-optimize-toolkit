@@ -25,6 +25,7 @@ from ..data.models import SKU, Location, Order, Warehouse, OrderLine
 from ..layout.geometry import manhattan_distance, Point
 from ..slotting.heuristics import assign_by_abc_popularity
 from ..routing.policies import get_s_shape_route
+from ..routing.layout_aware_routing import get_adaptive_route, LayoutType as WarehouseLayoutType
 
 
 class ObjectiveType(Enum):
@@ -283,7 +284,13 @@ class MOIWOF:
     
     def _compute_routes(self, slotting_plan: Dict[str, str], 
                         batches: List[List[str]]) -> Dict[str, List[str]]:
-        """Compute picker routes for each batch."""
+        """
+        Compute picker routes for each batch using layout-aware routing.
+        
+        This method now uses the layout-aware routing system that automatically
+        detects and handles different warehouse layouts (parallel-aisle, fishbone, etc.)
+        to address the -37.1% performance degradation on fishbone layouts.
+        """
         routes = {}
         
         for batch_idx, batch in enumerate(batches):
@@ -300,9 +307,12 @@ class MOIWOF:
             # Get Location objects
             pick_locations = [self.loc_map[loc_id] for loc_id in pick_loc_ids if loc_id in self.loc_map]
             
-            # Compute route using S-shape policy
+            # Compute route using layout-aware routing (handles fishbone, etc.)
             if pick_locations:
-                route = get_s_shape_route(pick_locations, self.graph, self.depot)
+                route = get_adaptive_route(
+                    pick_locations, self.graph, self.depot,
+                    all_locations=list(self.warehouse.locations)
+                )
             else:
                 route = [self.depot.loc_id, self.depot.loc_id]
             
